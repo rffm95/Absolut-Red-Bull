@@ -1,47 +1,616 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Neon Gemini Runner</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
-    <style>
-      body {
-        margin: 0;
-        padding: 0;
-        overflow: hidden;
-        background-color: #050011;
-        font-family: 'Rajdhani', sans-serif;
-        touch-action: none; /* Prevent pull-to-refresh on mobile */
-      }
-      .font-cyber {
-        font-family: 'Orbitron', sans-serif;
-      }
-    </style>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Cheers O Runner</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    body { margin:0; padding:0; overflow:hidden; background-color:#050011; font-family:'Rajdhani',sans-serif; touch-action:none; }
+    .font-cyber { font-family:'Orbitron',sans-serif; }
+  </style>
   <script type="importmap">
-{
-  "imports": {
-    "react/": "https://esm.sh/react@^19.2.0/",
-    "react": "https://esm.sh/react@^19.2.0",
-    "lucide-react": "https://esm.sh/lucide-react@^0.553.0",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.0/",
-    "@react-three/postprocessing": "https://esm.sh/@react-three/postprocessing@^3.0.4",
-    "@react-three/fiber": "https://esm.sh/@react-three/fiber@^9.4.0",
-    "zustand": "https://esm.sh/zustand@^5.0.8",
-    "uuid": "https://esm.sh/uuid@^13.0.0",
-    "@react-three/drei": "https://esm.sh/@react-three/drei@^10.7.7",
-    "three": "https://esm.sh/three@^0.181.1",
-    "postprocessing": "https://esm.sh/postprocessing@^6.38.0"
+  {
+    "imports": {
+      "react": "https://esm.sh/react@^19.0.0",
+      "react/": "https://esm.sh/react@^19.0.0/",
+      "react-dom": "https://esm.sh/react-dom@^19.0.0",
+      "react-dom/": "https://esm.sh/react-dom@^19.0.0/",
+      "three": "https://esm.sh/three@^0.176.0",
+      "three/": "https://esm.sh/three@^0.176.0/",
+      "@react-three/fiber": "https://esm.sh/@react-three/fiber@^9.1.2",
+      "@react-three/fiber/": "https://esm.sh/@react-three/fiber@^9.1.2/",
+      "@react-three/drei": "https://esm.sh/@react-three/drei@^10.0.0?deps=three@0.176.0",
+      "@react-three/drei/": "https://esm.sh/@react-three/drei@^10.0.0/",
+      "@react-three/postprocessing": "https://esm.sh/@react-three/postprocessing@^3.0.4?deps=three@0.176.0",
+      "postprocessing": "https://esm.sh/postprocessing@^6.36.4?deps=three@0.176.0",
+      "zustand": "https://esm.sh/zustand@^5.0.0",
+      "zustand/": "https://esm.sh/zustand@^5.0.0/",
+      "lucide-react": "https://esm.sh/lucide-react@^0.400.0",
+      "uuid": "https://esm.sh/uuid@^10.0.0"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="module">
+import React, { useState, useEffect, useRef, useMemo, Suspense } from 'react';
+import { createRoot } from 'react-dom/client';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import * as THREE from 'three';
+import { EffectComposer, Bloom, Vignette, Noise } from '@react-three/postprocessing';
+import { create } from 'zustand';
+import { Trophy, Play, Star, RotateCcw } from 'lucide-react';
+import { v4 as uuidv4 } from 'uuid';
+import { Text, Center, Float } from '@react-three/drei';
+
+// ─── TYPES ───────────────────────────────────────────────────────────────────
+const GameStatus = { MENU:'MENU', PLAYING:'PLAYING', GAME_OVER:'GAME_OVER' };
+const ObjectType = { OBSTACLE:'OBSTACLE', COLLECTIBLE:'COLLECTIBLE', DECORATION:'DECORATION' };
+const LANE_WIDTH = 2.5;
+const RUN_SPEED_BASE = 25.0;
+const SPAWN_DISTANCE = 150;
+const REMOVE_DISTANCE = 30;
+const REWARDS = [
+  { threshold:10, label:'1 Shot' },
+  { threshold:20, label:'1 Vodka Red Bull' },
+  { threshold:50, label:'3 Vodkas Red Bull' },
+  { threshold:100, label:'1 Garrafa de Absolut' }
+];
+
+// ─── AUDIO ───────────────────────────────────────────────────────────────────
+class AudioController {
+  constructor() { this.ctx=null; this.masterGain=null; }
+  init() {
+    if (!this.ctx) {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      this.masterGain = this.ctx.createGain();
+      this.masterGain.gain.value = 0.4;
+      this.masterGain.connect(this.ctx.destination);
+    }
+    if (this.ctx.state === 'suspended') this.ctx.resume().catch(()=>{});
+  }
+  playGemCollect() {
+    this.init(); if (!this.ctx) return;
+    const t=this.ctx.currentTime, osc=this.ctx.createOscillator(), gain=this.ctx.createGain();
+    osc.type='sine'; osc.frequency.setValueAtTime(1200,t); osc.frequency.exponentialRampToValueAtTime(2000,t+0.1);
+    gain.gain.setValueAtTime(0.5,t); gain.gain.exponentialRampToValueAtTime(0.01,t+0.15);
+    osc.connect(gain); gain.connect(this.masterGain); osc.start(t); osc.stop(t+0.15);
+  }
+  playDamage() {
+    this.init(); if (!this.ctx) return;
+    const t=this.ctx.currentTime;
+    const osc=this.ctx.createOscillator(), og=this.ctx.createGain();
+    osc.type='sawtooth'; osc.frequency.setValueAtTime(100,t); osc.frequency.exponentialRampToValueAtTime(20,t+0.3);
+    og.gain.setValueAtTime(0.6,t); og.gain.exponentialRampToValueAtTime(0.01,t+0.3);
+    osc.connect(og); og.connect(this.masterGain); osc.start(t); osc.stop(t+0.3);
   }
 }
-</script>
-<link rel="stylesheet" href="/index.css">
-</head>
-  <body>
-    <div id="root"></div>
-  <script type="module" src="/index.tsx"></script>
+const audio = new AudioController();
+
+// ─── STORE ────────────────────────────────────────────────────────────────────
+const useStore = create((set, get) => ({
+  status: GameStatus.MENU,
+  score: 0,
+  distance: 0,
+  speed: 0,
+  laneCount: 3,
+  startGame: () => set({ status:GameStatus.PLAYING, score:0, distance:0, speed:RUN_SPEED_BASE, laneCount:3 }),
+  restartGame: () => set({ status:GameStatus.PLAYING, score:0, distance:0, speed:RUN_SPEED_BASE, laneCount:3 }),
+  takeDamage: () => set({ status:GameStatus.GAME_OVER, speed:0 }),
+  collectDrink: () => set((state) => {
+    const newScore = state.score + 1;
+    let newSpeed = state.speed;
+    if (newScore===20) newSpeed*=1.20;
+    else if (newScore===35) newSpeed*=1.20;
+    else if (newScore===70) newSpeed*=1.20;
+    else if (newScore===90) newSpeed*=1.10;
+    else newSpeed+=0.05;
+    return { score:newScore, speed:newSpeed };
+  }),
+  setDistance: (dist) => set({ distance:dist }),
+  setStatus: (status) => set({ status }),
+}));
+
+// ─── EFFECTS ─────────────────────────────────────────────────────────────────
+function Effects() {
+  return React.createElement(EffectComposer, { multisampling:0 },
+    React.createElement(Bloom, { luminanceThreshold:0.75, mipmapBlur:true, intensity:1.0, radius:0.6, levels:8 }),
+    React.createElement(Vignette, { eskil:false, offset:0.1, darkness:0.5 })
+  );
+}
+
+// ─── ENVIRONMENT ─────────────────────────────────────────────────────────────
+function Road() {
+  const { speed, status } = useStore();
+  const meshRef = useRef(null);
+  useFrame((state, delta) => {
+    if (status !== GameStatus.PLAYING) return;
+    if (meshRef.current) {
+      meshRef.current.position.z += speed * delta;
+      if (meshRef.current.position.z > 50) meshRef.current.position.z = 0;
+    }
+  });
+  const lines = Array.from({length:40},(_,i)=>i);
+  return React.createElement('group', {ref:meshRef},
+    React.createElement('mesh', {rotation:[-Math.PI/2,0,0], position:[0,-0.01,-200]},
+      React.createElement('planeGeometry', {args:[LANE_WIDTH*3+10, 800]}),
+      React.createElement('meshStandardMaterial', {color:'#050011', roughness:0.1, metalness:0.5})
+    ),
+    ...lines.map(i =>
+      React.createElement('group', {key:i, position:[0,0,-i*10]},
+        React.createElement('mesh', {rotation:[-Math.PI/2,0,0], position:[-LANE_WIDTH*1.5,0.02,0]},
+          React.createElement('planeGeometry', {args:[0.2,5]}),
+          React.createElement('meshBasicMaterial', {color:'#00ffff'})
+        ),
+        React.createElement('mesh', {rotation:[-Math.PI/2,0,0], position:[LANE_WIDTH*1.5,0.02,0]},
+          React.createElement('planeGeometry', {args:[0.2,5]}),
+          React.createElement('meshBasicMaterial', {color:'#ff00ff'})
+        ),
+        React.createElement('mesh', {rotation:[-Math.PI/2,0,0], position:[-LANE_WIDTH/2,0.01,0]},
+          React.createElement('planeGeometry', {args:[0.1,2]}),
+          React.createElement('meshBasicMaterial', {color:'#ffffff', transparent:true, opacity:0.3})
+        ),
+        React.createElement('mesh', {rotation:[-Math.PI/2,0,0], position:[LANE_WIDTH/2,0.01,0]},
+          React.createElement('planeGeometry', {args:[0.1,2]}),
+          React.createElement('meshBasicMaterial', {color:'#ffffff', transparent:true, opacity:0.3})
+        )
+      )
+    )
+  );
+}
+
+function Environment() {
+  const { speed, status } = useStore();
+  const buildingsRef = useRef(null);
+  useFrame((state, delta) => {
+    if (status !== GameStatus.PLAYING) return;
+    if (buildingsRef.current) {
+      buildingsRef.current.children.forEach((b) => {
+        b.position.z += speed * delta;
+        if (b.position.z > 30) b.position.z = -((buildingsRef.current.children.length - 1) * 30) + 30;
+      });
+    }
+  });
+  const buildings = Array.from({length:20},(_,i)=>i);
+  const colors = ["#ff0077","#00ffcc","#ffff00","#ff00ff","#0033aa"];
+  return React.createElement(React.Fragment, null,
+    React.createElement('color', {attach:'background', args:['#050011']}),
+    React.createElement('fog', {attach:'fog', args:['#050011',20,150]}),
+    React.createElement('ambientLight', {intensity:1.5, color:'#ffffff'}),
+    React.createElement('directionalLight', {position:[10,50,10], intensity:2.5, color:'#ffffff'}),
+    React.createElement('pointLight', {position:[0,15,-10], intensity:20, color:'#00ffff'}),
+    React.createElement(Road),
+    React.createElement('group', {ref:buildingsRef},
+      ...buildings.map(i => {
+        const side = i%2===0 ? -18 : 18;
+        const color = colors[i%colors.length];
+        return React.createElement('group', {key:i, position:[side,0,-i*30]},
+          React.createElement('mesh', {position:[0,20,0]},
+            React.createElement('boxGeometry', {args:[10,60,25]}),
+            React.createElement('meshStandardMaterial', {color, metalness:0.9, roughness:0.1, emissive:color, emissiveIntensity:0.1})
+          ),
+          React.createElement('mesh', {position:[side>0?-5.1:5.1, 20, 0]},
+            React.createElement('planeGeometry', {args:[1.5,58]}),
+            React.createElement('meshBasicMaterial', {color:'#ffffff'})
+          )
+        );
+      })
+    )
+  );
+}
+
+// ─── PLAYER ──────────────────────────────────────────────────────────────────
+const SHADOW_GEO = new THREE.CircleGeometry(0.5, 32);
+
+function Player() {
+  const groupRef = useRef(null);
+  const bodyRef = useRef(null);
+  const shadowRef = useRef(null);
+  const leftArmRef = useRef(null);
+  const rightArmRef = useRef(null);
+  const leftLegRef = useRef(null);
+  const rightLegRef = useRef(null);
+  const { status, laneCount, takeDamage } = useStore();
+  const [lane, setLane] = useState(0);
+  const targetX = useRef(0);
+  const isInvincible = useRef(false);
+  const lastDamageTime = useRef(0);
+  const touchStartX = useRef(0);
+  const touchStartY = useRef(0);
+
+  const shadowMaterial = useMemo(() => new THREE.MeshBasicMaterial({color:'#000000',opacity:0.3,transparent:true}), []);
+
+  useEffect(() => {
+    if (status === GameStatus.PLAYING) {
+      if (groupRef.current) groupRef.current.position.y = 0;
+    }
+  }, [status]);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (status !== GameStatus.PLAYING) return;
+      const maxLane = Math.floor(laneCount/2);
+      if (e.key==='ArrowLeft') setLane(l=>Math.max(l-1,-maxLane));
+      else if (e.key==='ArrowRight') setLane(l=>Math.min(l+1,maxLane));
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [status, laneCount]);
+
+  useEffect(() => {
+    const onStart = (e) => { touchStartX.current=e.touches[0].clientX; touchStartY.current=e.touches[0].clientY; };
+    const onEnd = (e) => {
+      if (status !== GameStatus.PLAYING) return;
+      const dx=e.changedTouches[0].clientX-touchStartX.current;
+      const dy=e.changedTouches[0].clientY-touchStartY.current;
+      const maxLane=Math.floor(laneCount/2);
+      if (Math.abs(dx)>Math.abs(dy) && Math.abs(dx)>30) {
+        if (dx>0) setLane(l=>Math.min(l+1,maxLane));
+        else setLane(l=>Math.max(l-1,-maxLane));
+      }
+    };
+    window.addEventListener('touchstart', onStart);
+    window.addEventListener('touchend', onEnd);
+    return () => { window.removeEventListener('touchstart', onStart); window.removeEventListener('touchend', onEnd); };
+  }, [status, laneCount]);
+
+  useEffect(() => {
+    const checkHit = () => {
+      if (isInvincible.current) return;
+      audio.playDamage();
+      takeDamage();
+      isInvincible.current = true;
+      lastDamageTime.current = Date.now();
+    };
+    window.addEventListener('player-hit', checkHit);
+    return () => window.removeEventListener('player-hit', checkHit);
+  }, [takeDamage]);
+
+  useFrame((state, delta) => {
+    if (!groupRef.current) return;
+    if (status !== GameStatus.PLAYING) return;
+    targetX.current = lane * LANE_WIDTH;
+    groupRef.current.position.x = THREE.MathUtils.lerp(groupRef.current.position.x, targetX.current, delta*12);
+    const xDiff = targetX.current - groupRef.current.position.x;
+    groupRef.current.rotation.z = -xDiff*0.2;
+    groupRef.current.rotation.x = 0.05;
+    const time = state.clock.elapsedTime * 25;
+    if (leftArmRef.current) leftArmRef.current.rotation.x = Math.sin(time)*1.2;
+    if (rightArmRef.current) rightArmRef.current.rotation.x = Math.sin(time+Math.PI)*1.2;
+    if (leftLegRef.current) leftLegRef.current.rotation.x = Math.sin(time+Math.PI)*1.5;
+    if (rightLegRef.current) rightLegRef.current.rotation.x = Math.sin(time)*1.5;
+    if (bodyRef.current) { bodyRef.current.position.y = 0.4 + Math.abs(Math.sin(time))*0.2; bodyRef.current.rotation.z = Math.sin(time*0.5)*0.05; }
+    if (isInvincible.current) {
+      if (Date.now()-lastDamageTime.current > 1500) { isInvincible.current=false; groupRef.current.visible=true; }
+      else groupRef.current.visible = Math.floor(Date.now()/50)%2===0;
+    } else { groupRef.current.visible=true; }
+  });
+
+  return React.createElement('group', {ref:groupRef, position:[0,0,0], name:'PlayerMovingGroup'},
+    React.createElement('group', {ref:bodyRef, position:[0,0.4,0]},
+      React.createElement('mesh', {castShadow:true, position:[0,0.2,0]},
+        React.createElement('boxGeometry', {args:[0.7,0.7,1.4]}),
+        React.createElement('meshStandardMaterial', {color:'#ff0000', metalness:0.9, roughness:0.1, emissive:'#ff0000', emissiveIntensity:0.2})
+      ),
+      React.createElement('pointLight', {intensity:3, color:'#ffffff', distance:12, position:[0,2,0]}),
+      React.createElement('group', {position:[0,0.6,-0.7]},
+        React.createElement('mesh', {castShadow:true},
+          React.createElement('boxGeometry', {args:[0.6,0.6,0.6]}),
+          React.createElement('meshStandardMaterial', {color:'#ff0000', metalness:0.9, roughness:0.1})
+        ),
+        React.createElement('mesh', {position:[0.4,0.3,0], rotation:[0,0,-Math.PI/4]},
+          React.createElement('coneGeometry', {args:[0.15,0.6,8]}),
+          React.createElement('meshStandardMaterial', {color:'#ffff00', emissive:'#ffff00', emissiveIntensity:0.5})
+        ),
+        React.createElement('mesh', {position:[-0.4,0.3,0], rotation:[0,0,Math.PI/4]},
+          React.createElement('coneGeometry', {args:[0.15,0.6,8]}),
+          React.createElement('meshStandardMaterial', {color:'#ffff00', emissive:'#ffff00', emissiveIntensity:0.5})
+        )
+      ),
+      React.createElement('group', {position:[0.25,0,-0.5], ref:rightArmRef},
+        React.createElement('mesh', {position:[0,-0.2,0]}, React.createElement('boxGeometry',{args:[0.2,0.4,0.2]}), React.createElement('meshStandardMaterial',{color:'#ff0000'}))
+      ),
+      React.createElement('group', {position:[-0.25,0,-0.5], ref:leftArmRef},
+        React.createElement('mesh', {position:[0,-0.2,0]}, React.createElement('boxGeometry',{args:[0.2,0.4,0.2]}), React.createElement('meshStandardMaterial',{color:'#ff0000'}))
+      ),
+      React.createElement('group', {position:[0.25,0,0.5], ref:rightLegRef},
+        React.createElement('mesh', {position:[0,-0.2,0]}, React.createElement('boxGeometry',{args:[0.2,0.4,0.2]}), React.createElement('meshStandardMaterial',{color:'#ff0000'}))
+      ),
+      React.createElement('group', {position:[-0.25,0,0.5], ref:leftLegRef},
+        React.createElement('mesh', {position:[0,-0.2,0]}, React.createElement('boxGeometry',{args:[0.2,0.4,0.2]}), React.createElement('meshStandardMaterial',{color:'#ff0000'}))
+      )
+    ),
+    React.createElement('mesh', {ref:shadowRef, position:[0,0.02,0], rotation:[-Math.PI/2,0,0], geometry:SHADOW_GEO, material:shadowMaterial})
+  );
+}
+
+// ─── GAME ENTITY ─────────────────────────────────────────────────────────────
+const OBSTACLE_GEO = new THREE.CylinderGeometry(0.15,0.15,0.8,12);
+const COLLECTIBLE_GEO = new THREE.CylinderGeometry(0.2,0.2,0.6,12);
+
+const GameEntity = React.memo(function GameEntity({ data }) {
+  const groupRef = useRef(null);
+  useFrame((state) => {
+    if (!groupRef.current) return;
+    groupRef.current.position.z = data.position[2];
+    if (data.type === ObjectType.COLLECTIBLE) {
+      groupRef.current.position.y = data.position[1] + Math.sin(state.clock.elapsedTime*6)*0.1;
+      groupRef.current.rotation.y += 0.05;
+    }
+    if (data.type === ObjectType.OBSTACLE) {
+      groupRef.current.position.y = data.position[1] + Math.abs(Math.sin(state.clock.elapsedTime*8))*0.05;
+    }
+  });
+
+  if (data.type === ObjectType.OBSTACLE) {
+    return React.createElement('group', {ref:groupRef, position:[data.position[0],data.position[1],data.position[2]]},
+      React.createElement('mesh', {geometry:OBSTACLE_GEO},
+        React.createElement('meshStandardMaterial', {color:data.color, transparent:true, opacity:0.7, metalness:0.5, roughness:0.1, emissive:data.color, emissiveIntensity:0.3})
+      ),
+      React.createElement('group', {position:[0,0.7,0]},
+        React.createElement(Text, {fontSize:0.2, color:'#ffffff', anchorX:'center', anchorY:'middle'}, 'AGUA')
+      ),
+      React.createElement('pointLight', {intensity:0.5, color:data.color, distance:4})
+    );
+  }
+  if (data.type === ObjectType.COLLECTIBLE) {
+    return React.createElement('group', {ref:groupRef, position:[data.position[0],data.position[1],data.position[2]], rotation:[0,Math.PI/2,0]},
+      React.createElement('mesh', {geometry:COLLECTIBLE_GEO},
+        React.createElement('meshStandardMaterial', {color:data.color, metalness:1, roughness:0, emissive:data.color, emissiveIntensity:0.6})
+      ),
+      React.createElement('group', {position:[0,0.5,0], rotation:[0,-Math.PI/2,0]},
+        React.createElement(Text, {fontSize:0.18, color:'#ffffff', anchorX:'center', anchorY:'middle'}, 'RED BULL')
+      ),
+      React.createElement('pointLight', {intensity:1.5, color:'#ffffff', distance:5})
+    );
+  }
+  if (data.type === ObjectType.DECORATION) {
+    const label = data.color==='#0033aa' ? 'ABSOLUT' : data.color==='#ff0000' ? 'RED BULL' : 'CHEERS O BAR';
+    return React.createElement('group', {ref:groupRef, position:[data.position[0],data.position[1],data.position[2]], rotation:[0,-Math.PI/2,0]},
+      React.createElement('mesh',null,
+        React.createElement('planeGeometry',{args:[12,6]}),
+        React.createElement('meshStandardMaterial',{color:data.color,emissive:data.color,emissiveIntensity:0.2})
+      ),
+      React.createElement('group',{position:[0,0,0.1]},
+        React.createElement(Text,{fontSize:data.color==='#ffaa00'?0.8:1.2,color:'#ffffff',anchorX:'center',anchorY:'middle'}, label)
+      )
+    );
+  }
+  return null;
+});
+
+// ─── LEVEL MANAGER ───────────────────────────────────────────────────────────
+function LevelManager() {
+  const { status, speed, collectDrink, takeDamage } = useStore();
+  const objectsRef = useRef([]);
+  const [renderTrigger, setRenderTrigger] = useState(0);
+  const playerObjRef = useRef(null);
+  const distanceTraveled = useRef(0);
+
+  useEffect(() => {
+    if (status === GameStatus.MENU || status === GameStatus.PLAYING) {
+      objectsRef.current = [];
+      distanceTraveled.current = 0;
+      playerObjRef.current = null;
+      setRenderTrigger(t=>t+1);
+    }
+  }, [status]);
+
+  useFrame((state, delta) => {
+    if (status !== GameStatus.PLAYING) return;
+    if (!playerObjRef.current) {
+      const p = state.scene.getObjectByName('PlayerMovingGroup');
+      if (p) playerObjRef.current = p;
+      return;
+    }
+    const safeDelta = Math.min(delta, 0.05);
+    const dist = speed * safeDelta;
+    distanceTraveled.current += dist;
+
+    const playerPos = new THREE.Vector3();
+    playerObjRef.current.getWorldPosition(playerPos);
+
+    const keptObjects = [];
+    for (const obj of objectsRef.current) {
+      obj.position[2] += dist;
+      if (obj.active) {
+        const dz = Math.abs(obj.position[2] - playerPos.z);
+        const dx = Math.abs(obj.position[0] - playerPos.x);
+        if (dz < 1.0 && dx < 0.7) {
+          if (obj.type === ObjectType.OBSTACLE) { audio.playDamage(); takeDamage(); obj.active=false; }
+          else if (obj.type === ObjectType.COLLECTIBLE) { audio.playGemCollect(); collectDrink(); obj.active=false; }
+        }
+      }
+      if (obj.position[2] <= REMOVE_DISTANCE) keptObjects.push(obj);
+    }
+
+    const gameplayObjs = keptObjects.filter(o=>o.type!==ObjectType.DECORATION);
+    let furthestZ = gameplayObjs.length > 0 ? Math.min(...gameplayObjs.map(o=>o.position[2])) : -20;
+
+    if (furthestZ > -SPAWN_DISTANCE) {
+      const spawnZ = furthestZ - 30;
+      const lane = Math.floor(Math.random()*3) - 1;
+      const spawnType = Math.random();
+      if (spawnType > 0.4) {
+        if (spawnType > 0.7) {
+          keptObjects.push({ id:uuidv4(), type:ObjectType.OBSTACLE, position:[lane*LANE_WIDTH,0.4,spawnZ], active:true, color:'#ff0000' });
+        } else {
+          keptObjects.push({ id:uuidv4(), type:ObjectType.COLLECTIBLE, position:[lane*LANE_WIDTH,0.3,spawnZ], active:true, color:'#0033aa' });
+        }
+      }
+      if (Math.random() > 0.7) {
+        const side = Math.random()>0.5 ? 4 : -4;
+        const brands = ['ABSOLUT','RED BULL','CHEERS O BAR'];
+        const brand = brands[Math.floor(Math.random()*brands.length)];
+        const colorMap = {'ABSOLUT':'#0033aa','RED BULL':'#ff0000','CHEERS O BAR':'#ffaa00'};
+        keptObjects.push({ id:uuidv4(), type:ObjectType.DECORATION, position:[side,4,spawnZ], active:true, color:colorMap[brand] });
+      }
+    }
+
+    objectsRef.current = keptObjects;
+    setRenderTrigger(t=>t+1);
+  });
+
+  return React.createElement('group', null,
+    ...objectsRef.current.filter(o=>o.active).map(obj =>
+      React.createElement(GameEntity, {key:obj.id, data:obj})
+    )
+  );
+}
+
+// ─── CAMERA ──────────────────────────────────────────────────────────────────
+function CameraController() {
+  const { camera } = useThree();
+  useFrame((state, delta) => {
+    camera.position.lerp(new THREE.Vector3(0,6.5,12), delta*3.0);
+    camera.lookAt(0,0,-50);
+  });
+  return null;
+}
+
+// ─── HUD ─────────────────────────────────────────────────────────────────────
+function HUD() {
+  const { score, status, restartGame, startGame } = useStore();
+  const nextReward = REWARDS.find(r=>r.threshold>score) || REWARDS[REWARDS.length-1];
+  const lastReward = [...REWARDS].reverse().find(r=>r.threshold<=score);
+  const progress = Math.min(100, (score/nextReward.threshold)*100);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (status===GameStatus.MENU || status===GameStatus.GAME_OVER) {
+        if (e.key==='Enter' || e.key===' ' || e.code==='Space') {
+          if (status===GameStatus.MENU) startGame(); else restartGame();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [status, startGame, restartGame]);
+
+  if (status === GameStatus.MENU) {
+    return React.createElement('div', {className:'absolute inset-0 flex items-center justify-center z-[100] bg-[#050011] p-8 pointer-events-auto'},
+      React.createElement('div', {className:'flex flex-col items-center max-w-4xl text-center'},
+        React.createElement('div', {className:'flex space-x-12 mb-12 items-center'},
+          React.createElement('div', {className:'text-blue-500 font-black text-6xl tracking-tighter italic'}, 'ABSOLUT.'),
+          React.createElement('div', {className:'text-red-600 font-black text-4xl tracking-widest border-4 border-red-600 px-4 py-1'}, 'RED BULL'),
+          React.createElement('div', {className:'text-yellow-500 font-black text-4xl tracking-wider'}, 'CHEERS O BAR')
+        ),
+        React.createElement('h1', {className:'font-cyber text-[8rem] font-black text-white mb-2 tracking-tight uppercase leading-none drop-shadow-[0_0_50px_rgba(255,255,255,0.7)] animate-pulse'},
+          'CHEERS O ', React.createElement('span', {className:'text-red-600'}, 'RUNNER')
+        ),
+        React.createElement('p', {className:'text-4xl text-yellow-400 mb-12 max-w-4xl font-black uppercase tracking-[0.2em] drop-shadow-[0_0_15px_rgba(255,255,0,0.8)]'},
+          'DOMINA A NOITE NO ', React.createElement('span', {className:'text-white underline decoration-red-600'}, 'CHEERS O BAR')
+        ),
+        React.createElement('div', {className:'grid grid-cols-4 gap-6 mb-16 w-full'},
+          ...REWARDS.map((r,i) =>
+            React.createElement('div', {key:r.threshold, className:`bg-white/10 border-4 ${i%2===0?'border-blue-500':'border-red-600'} p-8 rounded-[2rem] shadow-xl`},
+              React.createElement('div', {className:'text-white font-black text-2xl mb-2 uppercase'}, `COLETE ${r.threshold}`),
+              React.createElement('div', {className:'text-yellow-400 font-black text-3xl uppercase'}, r.label)
+            )
+          )
+        ),
+        React.createElement('button', {
+          onClick: startGame,
+          className:'group relative px-20 py-10 bg-white text-black font-black text-5xl rounded-[3rem] hover:scale-110 transition-all shadow-[0_0_70px_rgba(255,255,255,0.5)] flex items-center border-8 border-cyan-400'
+        },
+          'PREMIR OK / ENTER ',
+          React.createElement(Play, {className:'ml-6 w-12 h-12 fill-black'})
+        )
+      )
+    );
+  }
+
+  if (status === GameStatus.GAME_OVER) {
+    return React.createElement('div', {className:'absolute inset-0 bg-black/95 z-[100] text-white p-8 flex flex-col items-center justify-center'},
+      React.createElement('h1', {className:'font-cyber text-9xl font-black text-red-600 mb-4 italic'}, 'GAME OVER'),
+      React.createElement('div', {className:'text-center mb-12'},
+        React.createElement('div', {className:'text-2xl text-gray-500 uppercase tracking-widest mb-2 font-black'}, 'Latas Coletadas'),
+        React.createElement('div', {className:'font-cyber text-[12rem] font-black leading-none text-white drop-shadow-[0_0_20px_#fff]'}, score)
+      ),
+      lastReward
+        ? React.createElement('div', {className:'bg-green-600 px-16 py-8 rounded-[3rem] mb-16 animate-bounce border-8 border-white shadow-[0_0_60px_rgba(0,255,0,0.8)] transform rotate-3'},
+            React.createElement('div', {className:'text-2xl font-black uppercase text-white/90 mb-2 italic tracking-widest'}, 'GANHOU UM PRÉMIO!'),
+            React.createElement('div', {className:'text-6xl font-black text-white'}, lastReward.label),
+            React.createElement('div', {className:'text-white/80 font-bold mt-4 uppercase text-xl'}, 'LEVANTAR NO BALCÃO DO CHEERS O BAR')
+          )
+        : React.createElement('div', {className:'flex flex-col items-center mb-16'},
+            React.createElement('div', {className:'text-white bg-red-600 px-16 py-8 rounded-[3rem] text-4xl font-black uppercase tracking-widest border-8 border-white -rotate-3 mb-8'}, 'Upps tenta outra vez!'),
+            React.createElement('p', {className:'text-yellow-400 font-bold uppercase tracking-widest animate-pulse'}, 'Dica: Pede outra Red Bull para recuperar energias!')
+          ),
+      React.createElement('button', {
+        onClick: restartGame,
+        className:'px-16 py-8 bg-blue-600 text-white font-black text-4xl rounded-2xl hover:scale-105 transition-all shadow-[0_0_50px_rgba(0,100,255,0.5)] flex items-center'
+      },
+        'CORRER NOVAMENTE ',
+        React.createElement(RotateCcw, {className:'ml-4 w-10 h-10'})
+      )
+    );
+  }
+
+  return React.createElement('div', {className:'absolute inset-0 pointer-events-none flex flex-col justify-between p-12 z-50 overflow-hidden'},
+    React.createElement('div', {className:'flex justify-between items-start w-full'},
+      React.createElement('div', {className:'flex flex-col'},
+        React.createElement('div', {className:'text-sm font-black text-red-600 mb-2 tracking-[0.5rem] uppercase'}, 'Latas Red Bull'),
+        React.createElement('div', {className:'font-cyber text-9xl font-black text-white drop-shadow-[0_0_20px_rgba(255,0,0,0.3)]'}, score)
+      ),
+      React.createElement('div', {className:'flex flex-col items-end'},
+        React.createElement('div', {className:'flex space-x-8 mb-6 items-center'},
+          React.createElement('div', {className:'text-blue-500 font-black text-3xl italic'}, 'ABSOLUT.'),
+          React.createElement('div', {className:'text-red-600 font-bold text-xl border-2 border-red-600 px-2 py-0.5'}, 'RED BULL'),
+          React.createElement('div', {className:'text-yellow-500 font-bold text-xl'}, 'CHEERS O BAR')
+        ),
+        React.createElement('div', {className:'bg-white/10 backdrop-blur-md p-6 rounded-2xl border border-white/20 w-80'},
+          React.createElement('div', {className:'text-xs font-black text-gray-400 uppercase mb-3 tracking-widest'}, `Próximo Prémio: ${nextReward.label}`),
+          React.createElement('div', {className:'relative h-4 w-full bg-white/10 rounded-full overflow-hidden border border-white/10'},
+            React.createElement('div', {className:'absolute inset-y-0 left-0 bg-gradient-to-r from-blue-500 via-cyan-400 to-white transition-all duration-500', style:{width:`${progress}%`}})
+          )
+        )
+      )
+    ),
+    React.createElement('div', {className:'w-full flex justify-center pb-8 animate-pulse'},
+      React.createElement('div', {className:'flex items-center space-x-12 px-10 py-4 bg-black/80 rounded-full border border-white/20'},
+        React.createElement('div', {className:'flex items-center space-x-2'},
+          React.createElement('div', {className:'w-8 h-8 rounded border border-white flex items-center justify-center text-xs text-white'}, '←'),
+          React.createElement('div', {className:'w-8 h-8 rounded border border-white flex items-center justify-center text-xs text-white'}, '→'),
+          React.createElement('span', {className:'text-sm font-black uppercase text-gray-400'}, 'Mudar Faixa')
+        ),
+        React.createElement('div', {className:'text-sm font-black uppercase text-red-500'}, 'EVITE AS GARRAFAS DE ÁGUA!')
+      )
+    )
+  );
+}
+
+// ─── APP ─────────────────────────────────────────────────────────────────────
+function App() {
+  return React.createElement('div', {className:'relative w-full h-screen bg-[#020008] overflow-hidden select-none'},
+    React.createElement(HUD),
+    React.createElement(Canvas, {
+      shadows: true,
+      dpr: 1.5,
+      gl: { antialias:true, stencil:false, depth:true, powerPreference:'high-performance' },
+      camera: { position:[0,6.5,12], fov:50 }
+    },
+      React.createElement(CameraController),
+      React.createElement(Suspense, {fallback:null},
+        React.createElement(Environment),
+        React.createElement('group', {userData:{isPlayer:true}, name:'PlayerGroup'},
+          React.createElement(Player)
+        ),
+        React.createElement(LevelManager),
+        React.createElement(Effects)
+      )
+    )
+  );
+}
+
+const root = createRoot(document.getElementById('root'));
+root.render(React.createElement(App));
+  </script>
 </body>
 </html>
